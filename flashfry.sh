@@ -8,9 +8,9 @@ if ! test -f htky_db; then
   java -Xmx4g -jar FlashFry-assembly-1.12.jar \
    index \
    --tmpLocation ./build \
-   --database htky_db \
+   --database htky_ngg19 \
    --reference HT.Ref.fasta \
-   --enzyme spcas9ngg
+   --enzyme spcas9ngg19
 fi
 
 if [[ $IN =~ .*\.bed ]]; then

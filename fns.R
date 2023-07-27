@@ -38,7 +38,7 @@ parseTarget <- function(x) {
 		       sequence=sequence))
 }
 
-readOut <- function(x,dat,cutoff=0.55){
+readOut <- function(x,cutoff=0.50){
 	out <- read.delim(x)
 	outscore <- read.delim(paste0(x,'.scored'))
 	outscore <- outscore[
@@ -50,12 +50,13 @@ readOut <- function(x,dat,cutoff=0.55){
 	]
 
 	out <- merge(out,outscore)
-	out$KYID=sub('\\.v.*','',out$contig)
+	#         out$KYID=sub('\\.v.*','',out$contig)
+	out$KYID=sub('::.*','',out$contig)
 
-	out <- merge(out,dat,by.x="KYID",by.y="Gene.ID",all.x=T)
-	out[is.na(out$Uniq_Name),"Uniq_Name"] <- paste0(
-		"KY2019:",out$KYID[is.na(out$Uniq_Name)]
-	)
+	#         out <- merge(out,dat,by.x="KYID",by.y="Gene.ID",all.x=T)
+	#         out[is.na(out$Uniq_Name),"Uniq_Name"] <- paste0(
+	#                 "KY2019:",out$KYID[is.na(out$Uniq_Name)]
+	#         )
 
 	return(out)
 }
@@ -76,6 +77,9 @@ best3 <- function(x,cutoff=0.55) {
 	if(length(tmp)<3) {
 		x <- x[order(x$Doench2014OnTarget,decreasing=T)[1:3]]
 	} else x <- tmp
+	if(sum(x$conserved)>2){
+		x <- x[x$conserved,]
+	}
 	x <- x[order(x$exon)]
 	x <- x[order(x$otCount)]
 	x <- x[order(x$SNPct)]
@@ -103,7 +107,7 @@ countTx <- function(targetGene,exon) lapply(
 )
 
 
-getContigs <- function(out){
+getContigs <- function(out,conserved){
 	require(GenomicRanges)
 	contig <- GRanges(
 		sub('.*::([A-Za-z0-9]+):.*','\\1',out$contig),
@@ -119,8 +123,41 @@ getContigs <- function(out){
 		#KYID=sub('\\.v.*','',out$contig),
 		contig=sub('(.*)::.*','\\1',out$contig)
 	)
-	mcols(contig) <- cbind(mcols(contig),out[,-2:-4])
+	mcols(contig) <- cbind(mcols(contig),out[,-1:-3])
+	contig$conserved <- overlapsAny(contig,conserved)
 	contig
+}
+
+onTarget <- function(contig){
+	require(GenomicRanges)
+	require(Biostrings)
+	targetGene <- GRanges(seqnames(contig),
+		do.call(IRanges,as.data.frame(t(mapply(
+			function(x.start,x.stop,y.start,y.stop,is.fwd){
+				if(is.fwd) c(start=x.start+y.start,
+					     end=x.start+y.stop-1) 
+				else c(start=x.stop-y.stop+1,
+				       end=x.stop-y.start)
+			},
+			start(contig), end(contig), out$start,out$stop,
+			as.character(strand(contig))=='+'
+		)))),
+		mapply(
+			function(x,y) {
+				if(y) x else {
+					if(x=='+') {
+						'-' 
+					}else '+'
+				}
+			},
+			as.character(strand(contig)),
+			out$orientation=="FWD"
+		),
+		mcols(contig)
+	)
+
+	targetGene <- targetGene[!duplicated(targetGene)]
+	return(targetGene)
 }
 
 getOnTarget <- function(contig,out,exon,file, snps='cint.snps.bed'){
@@ -186,22 +223,23 @@ getOnTarget <- function(contig,out,exon,file, snps='cint.snps.bed'){
 
 getPlates <- function(targetGene,out){
 	targetGene$plate <- 1:3
-	targetGene$well_position <- c(sapply(
+	well_position <- c(sapply(
 		1:12, function(x) paste0(
 			sapply(LETTERS[1:8],rep,3), 
 			as.character(x)
 		)
 	))
-	targetGene$well_position <- factor(
-		targetGene$well_position,
-		unique(targetGene$well_position)
+	well_position <- factor(
+		well_position,
+		unique(well_position)
 	)
+	targetGene$well_position <- well_position[1:length(targetGene)]
 
 	plates <- targetGene[,c(
 		'plate','well_position','sequence_name','fwd','rev'
 	)]
 	plates <- reshape2::melt(
-		as.data.frame(plates),
+		as.data.frame(mcols(plates)),
 		1:3,4:5,
 		value.name='sequence'
 	)
@@ -217,5 +255,58 @@ getPlates <- function(targetGene,out){
 	       paste0(out,'Plate',as.character(1:3),'.csv'),
 	       row.names=F,quote=F)
 
+}
+
+
+getSNPs <- function(r,snps){
+	reversed <- as.character(strand(r)[1])=='-'
+	
+	targetSNPs <- split(snps,
+			    paste0(seqnames(snps),':',
+				   start(snps)))
+	target <- DNAString(r$target[1])
+	nts <- sapply(targetSNPs,
+		      function(x) {
+			      paste0(unique(unlist(strsplit(paste0(x$name,
+						    collapse=''),''))),
+		      collapse='')
+		      })
+	gap <- grepl('\\.',nts)
+	nts <- sub('\\.','',nts)
+	subst <- DNAStringSet(mapply(function(gap,nts){
+					     if(gap) '-' else{
+						     mergeIUPACLetters(nts)
+					     }},gap,nts))
+	ix <- unique(start(snps))-start(r)[1]+1
+	if(reversed) {
+		#                 subst <- complement(subst)
+		target <- reverseComplement(target)
+		ix <- ix
+	}
+	target[ix] <- unlist(subst)
+	if(reversed) target <- reverseComplement(target)
+	return(target)
+}
+
+seqEntropy <- function(x){
+	nn <- c('M','R','W','S','Y','K')
+	nnn <- c('V','H','D','B')
+	h <- sum(letterFrequency(x,nn))+
+		sum(letterFrequency(x,nnn))*-log2(1/3)+
+		sum(letterFrequency(x,c('N')))*2
+	return(h)
+}
+
+
+overlapWidth <- function(x,y){
+	res <- rep(0,length(x))
+
+	overlaps <- findOverlaps(x,y)
+	sel <- unique(from(overlaps))
+	nts <- width(pintersect(x[from(overlaps)],
+					  y[to(overlaps)]))
+	nts <- sapply(split(nts,from(overlaps)),sum)
+	res[sel] <- accessibleNTs
+	return(res)
 }
 

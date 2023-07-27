@@ -14,7 +14,7 @@ dat <- dat[order(dat$logfoldchanges,decreasing=T),]
 sel <- setdiff(dat[dat$gene_network_leiden==2,'Gene.ID'],sgrna$KYID)[1:192]
 
 write.csv(dat[sel,],'genes.csv')
-system2('Rscript','runFlashfry.R --genes genes.csv --cutoff 0.55')
+system2('Rscript','runFlashfry.R --genes genes.csv')
 
 targets <- read.csv('genesSiteScore.csv')
 targets <- targets[order(targets$logfoldchanges,decreasing=T),]

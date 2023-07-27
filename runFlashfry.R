@@ -15,17 +15,26 @@ opts <- parse_args(parser)
 prefix <- sub('\\..*','',opts$genes)
 bed <- paste0(prefix,'.bed')
 dat <- read.csv(opts$genes)
-sel <- dat[,1]
+dat$Gene.ID <- sub('KY2019:','',dat$Gene.ID)
+sel <- dat$Gene.ID
 
 exon <- getExons()
+
+ky <- makeTxDbFromGFF("HT.Gene.gff3")
+tpt <- transcripts(ky)
+promoter <- promoters(tpt,1107,107)
+gene <- punion(tpt,promoter)
+mcols(gene) <- mcols(tpt)
 
 cint <- import('cint.bed')
 # snps <- import('cint.snps.bed')
 
 peaks <- import('accessomeKY.bed')
 
-cint <- intersect(cint,peaks)
-tmp <- findOverlapPairs(exon,cint)
+# cint <- intersect(cint,peaks)
+tmp <- findOverlapPairs(gene,cint)
+conserved <- pintersect(tmp)
+conslist <- split(conserved,sub('\\.v.*','',conserved$tx_name))
 
 conserved <- GRanges(
 	seqnames(first(tmp)),
@@ -40,13 +49,15 @@ names(conserved) <- paste0(conserved$tx_name,'_exon',as.character(conserved$exon
 
 export(conserved,'genometargets.bed')
 
-targetSites <- sapply(paste0(sel,'\\.v'),grep,names(conserved))
+targetSites <- sapply(paste0(sel,'\\.v'),grep,names(exon))
 
-export(conserved[unlist(targetSites)],bed)
+export(exon[unlist(targetSites)],bed)
 
 system2('./flashfry.sh',bed)
 
 out <- readOut(paste0(prefix,'.output'),dat,opts$cutoff)
 
-contig <- getContigs(out)
+contig <- getContigs(out,conserved)
 targetGene <- getOnTarget(contig, out,exon,prefix)
+
+getPlates(targetGene,prefix)
